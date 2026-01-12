@@ -23,4 +23,4 @@ Apply undistort+rectify maps to live video and draw horizontal lines so you can 
 ## Step 7: disparity (`step7_disparity.py`)
 Run a stereo matcher (e.g. SGBM) on the rectified images to produce a disparity map you can visualize.
 
-If you want the full maths write-up as LaTeX, see `stereo_vision_pipeline.tex`.
+## For slightly more detail, see LaTeX `stereo_vision_pipeline.tex`.
