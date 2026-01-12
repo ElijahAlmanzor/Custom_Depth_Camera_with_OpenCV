@@ -1,0 +1,349 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage[T1]{fontenc}
+\usepackage[hidelinks]{hyperref}
+
+\title{Stereo vision pipeline (7 steps)\\OpenCV, ChArUco, with maths}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+This document summarises the 7-step stereo pipeline implemented in the scripts. The goal is to build a stereo depth camera from two webcams using OpenCV. A printed ChArUco board is used to estimate intrinsics and stereo extrinsics.
+
+Throughout, we use the left camera as the reference frame.
+
+\section{Step 1: verify both webcams work (side-by-side preview)}
+
+\subsection*{Goal}
+Open two cameras and display frames side by side. Confirm:
+\begin{itemize}
+  \item both cameras stream reliably
+  \item indices are correct
+  \item resolution and frame rate are stable
+\end{itemize}
+
+\subsection*{Maths}
+No calibration maths here. This step is simply verifying that the image acquisition function
+\[
+I_k(u,v,t)
+\]
+exists and is stable for each camera \(k \in \{L,R\}\).
+
+\subsection*{OpenCV concepts}
+\begin{itemize}
+  \item \verb|cv2.VideoCapture(index, cv2.CAP_DSHOW)|
+  \item \verb|cap.read()|
+  \item \verb|np.hstack([frameL, frameR])|
+\end{itemize}
+
+\section{Step 2: ChArUco detection overlay (live sanity check)}
+
+\subsection*{Goal}
+Detect ArUco markers and interpolate ChArUco chessboard corners, overlay them on each stream. Confirm:
+\begin{itemize}
+  \item the printed board matches the definition in code
+  \item corners and IDs are detected consistently
+  \item board is not too small or blurred
+\end{itemize}
+
+\subsection*{Maths}
+A ChArUco board provides known 3D corner coordinates \(\mathbf{X}_i\) in the board frame, typically planar:
+\[
+\mathbf{X}_i =
+\begin{bmatrix}
+X_i \\ Y_i \\ 0
+\end{bmatrix}
+\]
+and detected 2D image observations
+\[
+\mathbf{x}_{i} =
+\begin{bmatrix}
+u_i \\ v_i
+\end{bmatrix}.
+\]
+
+This is the measurement data used in camera calibration.
+
+\subsection*{OpenCV concepts}
+\begin{itemize}
+  \item \verb|cv2.aruco.ArucoDetector.detectMarkers|
+  \item \verb|cv2.aruco.interpolateCornersCharuco|
+  \item \verb|cv2.aruco.drawDetectedMarkers|
+  \item \verb|cv2.aruco.drawDetectedCornersCharuco|
+\end{itemize}
+
+\section{Step 3: stereo data capture (save frames and ChArUco detections)}
+
+\subsection*{Goal}
+Save synchronised stereo pairs when the board is valid in both cameras. Save:
+\begin{itemize}
+  \item left image \(I_L\)
+  \item right image \(I_R\)
+  \item corresponding ChArUco corners and IDs for both cameras
+\end{itemize}
+
+A typical validity test is a minimum number of interpolated ChArUco corners:
+\[
+N_{\mathrm{charuco}} \ge N_{\min}.
+\]
+
+\subsection*{Data stored per stereo pair}
+For each index \(j\):
+\begin{itemize}
+  \item left: \(\{(\mathbf{x}^L_{i,j}, \mathrm{id}_{i,j})\}\)
+  \item right: \(\{(\mathbf{x}^R_{i,j}, \mathrm{id}_{i,j})\}\)
+\end{itemize}
+
+\subsection*{OpenCV concepts}
+\begin{itemize}
+  \item image saving: \verb|cv2.imwrite|
+  \item metadata saving: \verb|np.savez|
+  \item only accept frames with enough ChArUco corners
+\end{itemize}
+
+\section{Step 4: intrinsics calibration for each camera}
+
+\subsection*{Goal}
+Estimate intrinsics and distortion for each camera separately using the saved ChArUco observations.
+
+For camera \(k \in \{L,R\}\), estimate:
+\begin{itemize}
+  \item camera matrix
+\end{itemize}
+\[
+\mathbf{K}_k =
+\begin{bmatrix}
+f_{x,k} & 0 & c_{x,k} \\
+0 & f_{y,k} & c_{y,k} \\
+0 & 0 & 1
+\end{bmatrix}
+\]
+\begin{itemize}
+  \item distortion coefficients \(\mathbf{d}_k\), typically
+\end{itemize}
+\[
+\mathbf{d}_k = [k_1, k_2, p_1, p_2, k_3, \dots]
+\]
+
+\subsection*{Maths: reprojection model}
+For a given image \(j\), the board pose relative to camera \(k\) is \((\mathbf{R}_{k,j}, \mathbf{t}_{k,j})\). A 3D board point \(\mathbf{X}_i\) maps to camera coordinates:
+\[
+\mathbf{X}^{k}_{i,j} = \mathbf{R}_{k,j}\mathbf{X}_i + \mathbf{t}_{k,j}.
+\]
+
+Under an ideal pinhole camera model with no distortion, the projected pixel coordinates satisfy:
+\[
+s
+\begin{bmatrix}
+u_{i,j} \\
+v_{i,j} \\
+1
+\end{bmatrix}
+=
+\mathbf{K}_k
+\begin{bmatrix}
+\frac{X^{k}_{i,j}}{Z^{k}_{i,j}} \\
+\frac{Y^{k}_{i,j}}{Z^{k}_{i,j}} \\
+1
+\end{bmatrix}.
+\]
+
+Distortion is applied in normalised coordinates before \(\mathbf{K}_k\).
+
+\subsection*{Optimisation objective}
+OpenCV estimates parameters by minimising reprojection error:
+\[
+\min_{\mathbf{K}_k, \mathbf{d}_k, \{\mathbf{R}_{k,j},\mathbf{t}_{k,j}\}}
+\sum_{j}\sum_{i}
+\left\|
+\mathbf{x}^{k}_{i,j} - \pi(\mathbf{K}_k,\mathbf{d}_k,\mathbf{R}_{k,j},\mathbf{t}_{k,j},\mathbf{X}_i)
+\right\|^2.
+\]
+
+\subsection*{Outputs saved}
+\begin{itemize}
+  \item \texttt{intrinsics\_left.npz} and \texttt{intrinsics\_right.npz}
+  \item \(\mathbf{K}_k\), \(\mathbf{d}_k\), image size, RMS error
+\end{itemize}
+
+\subsection*{OpenCV concepts}
+\begin{itemize}
+  \item \verb|cv2.aruco.calibrateCameraCharuco|
+  \item optionally with \verb|cv2.CALIB_RATIONAL_MODEL| for richer distortion
+\end{itemize}
+
+\section{Step 5: stereo calibration and rectification}
+
+\subsection*{Goal}
+Estimate the rigid transform between cameras:
+\[
+\mathbf{X}_R = \mathbf{R}\mathbf{X}_L + \mathbf{t}
+\]
+and compute rectification transforms.
+
+The baseline length is:
+\[
+B = \|\mathbf{t}\|.
+\]
+
+\subsection*{Correspondence assembly using common ChArUco IDs}
+For each stereo pair \(j\), find the set of ChArUco IDs visible in both cameras:
+\[
+\mathcal{C}_j = \mathrm{IDs}_L \cap \mathrm{IDs}_R.
+\]
+For each id \(c \in \mathcal{C}_j\), use:
+\begin{itemize}
+  \item 3D board corner \(\mathbf{X}_c\)
+  \item left image point \(\mathbf{x}^L_{c,j}\)
+  \item right image point \(\mathbf{x}^R_{c,j}\)
+\end{itemize}
+
+These give the input to stereo calibration.
+
+\subsection*{Maths: stereo reprojection error}
+With intrinsics fixed, stereo calibration estimates \(\mathbf{R},\mathbf{t}\) by minimising combined reprojection error across all stereo pairs:
+\[
+\min_{\mathbf{R},\mathbf{t}, \{\mathbf{R}_{j},\mathbf{t}_{j}\}}
+\sum_{j}\sum_{c \in \mathcal{C}_j}
+\left(
+\left\|
+\mathbf{x}^L_{c,j} - \pi(\mathbf{K}_L,\mathbf{d}_L,\mathbf{R}_{L,j},\mathbf{t}_{L,j},\mathbf{X}_c)
+\right\|^2
++
+\left\|
+\mathbf{x}^R_{c,j} - \pi(\mathbf{K}_R,\mathbf{d}_R,\mathbf{R}_{R,j},\mathbf{t}_{R,j},\mathbf{X}_c)
+\right\|^2
+\right)
+\]
+subject to the constraint that camera poses are related by \((\mathbf{R},\mathbf{t})\).
+
+\subsection*{Rectification}
+Rectification produces transforms that make epipolar lines horizontal. It returns:
+\begin{itemize}
+  \item \(\mathbf{R}_1,\mathbf{R}_2\) rectifying rotations
+  \item \(\mathbf{P}_1,\mathbf{P}_2\) rectified projection matrices
+  \item \(\mathbf{Q}\) disparity-to-3D reprojection matrix
+\end{itemize}
+
+After rectification, corresponding points satisfy approximately:
+\[
+v_L \approx v_R.
+\]
+
+\subsection*{Outputs saved}
+\begin{itemize}
+  \item \texttt{stereo\_calib.npz} containing \(R, t, B, R1, R2, P1, P2, Q\)
+\end{itemize}
+
+\subsection*{OpenCV concepts}
+\begin{itemize}
+  \item \verb|cv2.stereoCalibrate| with \verb|cv2.CALIB_FIX_INTRINSIC|
+  \item \verb|cv2.stereoRectify|
+  \item \verb|cv2.initUndistortRectifyMap|
+\end{itemize}
+
+\section{Step 6: rectified live preview with epipolar lines}
+
+\subsection*{Goal}
+Use the calibration and rectification outputs to produce rectified live images:
+\[
+I'_L = \operatorname{remap}(I_L), \qquad I'_R = \operatorname{remap}(I_R).
+\]
+
+Overlay horizontal lines to visually confirm:
+\[
+v'_L \approx v'_R
+\]
+for matching features.
+
+\subsection*{Maths}
+This step applies the computed undistortion and rectification warps:
+\[
+\mathbf{x}' = \mathcal{W}(\mathbf{x}; \mathbf{K}, \mathbf{d}, \mathbf{R}_{\mathrm{rect}}, \mathbf{P})
+\]
+implemented as pixel remapping.
+
+No new estimation happens here; it is purely applying the transforms.
+
+\subsection*{OpenCV concepts}
+\begin{itemize}
+  \item \verb|cv2.initUndistortRectifyMap|
+  \item \verb|cv2.remap|
+  \item draw horizontal lines for epipolar consistency checking
+\end{itemize}
+
+\section{Step 7: disparity computation}
+
+\subsection*{Goal}
+Compute a disparity map from the rectified stereo images.
+
+For rectified images, disparity is:
+\[
+d(u,v) = u_L(u,v) - u_R(u,v).
+\]
+
+Disparity is depth up to scale, because:
+\[
+Z = \frac{f_x B}{d}
+\quad\Rightarrow\quad
+Z \propto \frac{1}{d}
+\]
+if \(f_x\) and \(B\) are not applied.
+
+\subsection*{Stereo matching objective}
+Stereo algorithms choose the disparity that minimises a matching cost along scanlines:
+\[
+d^*(u,v) = \arg\min_{d} \; C\left(I'_L(u,v),\; I'_R(u-d,v)\right).
+\]
+
+StereoSGBM adds smoothness to encourage piecewise smooth disparity. The result is a dense disparity image.
+
+\subsection*{Output}
+\begin{itemize}
+  \item disparity image \(d(u,v)\) in pixels, often stored with fixed-point scaling in OpenCV
+  \item visualised via normalisation
+\end{itemize}
+
+\subsection*{OpenCV concepts}
+\begin{itemize}
+  \item \verb|cv2.StereoSGBM_create|
+  \item \verb|stereo.compute(grayL, grayR)|
+  \item divide by 16 if using fixed-point scaling
+  \item \verb|cv2.normalize| for visualisation
+\end{itemize}
+
+\section{Notes on units and the meaning of disparity}
+
+Disparity is not metric depth. It is pixel shift. Metric depth requires:
+\begin{itemize}
+  \item focal length \(f_x\)
+  \item baseline \(B\)
+  \item correct calibration
+\end{itemize}
+
+Metric depth is obtained by:
+\[
+Z = \frac{f_x B}{d}
+\]
+or via OpenCV \(Q\) reprojection:
+\[
+\begin{bmatrix}
+X\\Y\\Z\\W
+\end{bmatrix}
+=
+\mathbf{Q}
+\begin{bmatrix}
+u\\v\\d\\1
+\end{bmatrix},
+\qquad
+(X,Y,Z) \leftarrow (X/W, Y/W, Z/W).
+\]
+
+This is a natural Step 8 if metric depth is required.
+
+\end{document}
+
