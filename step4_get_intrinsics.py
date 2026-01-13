@@ -99,7 +99,13 @@ def calibrate_camera(camera_name, image_dir, charuco_dir, out_dir):
         K=K,
         dist=dist,
         image_size=image_size,
-        rms=rms
+        rms=rms,
+        calib_flags=int(flags),
+        squares_x=squares_x,
+        squares_y=squares_y,
+        square_length=square_length,
+        marker_length=marker_length,
+        aruco_dict_id=int(cv2.aruco.DICT_4X4_50),
     )
 
     print(f"Saved intrinsics to {out_path}")

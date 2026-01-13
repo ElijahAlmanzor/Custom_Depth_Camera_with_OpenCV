@@ -61,6 +61,7 @@ def main():
     )
 
     print("Disparity running (press q to quit)")
+    display_scale = 0.6
 
     while True:
         okL, frameL = capL.read()
@@ -88,7 +89,14 @@ def main():
             cv2.cvtColor(disp_vis, cv2.COLOR_GRAY2BGR)
         ])
 
-        cv2.imshow("Left (rectified) | Disparity", combined)
+        combined_disp = cv2.resize(
+            combined,
+            None,
+            fx=display_scale,
+            fy=display_scale,
+            interpolation=cv2.INTER_AREA,
+        )
+        cv2.imshow("Left (rectified) | Disparity", combined_disp)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
@@ -97,6 +105,9 @@ def main():
     capR.release()
     cv2.destroyAllWindows()
 
+## PLOT THE RECTIFIED IMAGES - VRERIFY THAT THEY'RE ACTUALLY CORRECT!
+
 
 if __name__ == "__main__":
     main()
+
